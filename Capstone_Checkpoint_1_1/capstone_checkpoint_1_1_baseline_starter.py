@@ -66,6 +66,12 @@ LLM_MODEL = "openai/gpt-5.4-mini"  # latest small OpenAI model, fast; covered by
 TEMPERATURE = 0.2
 LOG_PATH = Path.cwd() / "checkpoint_1_1_responses.log"
 
+# Curated set of source PDFs the research_papers probe prompts below are
+# grounded in. No retrieval/parsing happens in this checkpoint (see intro
+# markdown) — this path is only referenced in prompt text and log entries
+# so answers can be checked by hand against the real files here.
+DOCS_DIR = Path.cwd() / "Capstone_Checkpoint_1_1_DocsUsed" / "V02"
+
 # === SET THIS to your chosen scenario ===
 SCENARIO = "research_papers"   # "research_papers" or "wikipedia"
 
@@ -108,10 +114,11 @@ def ask(chain: Any, question: str) -> str:
     return resp.content if hasattr(resp, "content") else str(resp)
 
 
-def log_response(scenario: str, prompt: str, response: str) -> None:
+def log_response(scenario: str, prompt: str, response: str, source_file: str = "") -> None:
     ts = datetime.now().isoformat(timespec="seconds")
     entry = (
         f"[{ts}]  SCENARIO={scenario}  MODEL={LLM_MODEL}\n"
+        f"SOURCE:   {source_file or '(not tied to a single document)'}\n"
         f"PROMPT:   {prompt}\n"
         f"RESPONSE: {response}\n"
         f"{'-' * 72}\n"
@@ -131,34 +138,61 @@ def log_response(scenario: str, prompt: str, response: str) -> None:
 # These three behaviors are your evidence that retrieval is required. Read the responses critically — a fluent answer is not necessarily a correct one.
 
 # %%
-# Example baseline prompts per scenario. These reference REAL documents in the
-# capstone datasets so you can check the model's answers against the source.
-EXAMPLE_PROMPTS = {
+# Example baseline prompts per scenario, each paired with the exact source
+# file(s) in DOCS_DIR the prompt is asking about. Every entry is a
+# (prompt, source_file) tuple so the source document travels with the
+# prompt through run_probes() into the printed output and the log file.
+# research_papers prompts below use ONLY the 5 curated PDFs in DOCS_DIR.
+EXAMPLE_PROMPTS: dict[str, list[tuple[str, str]]] = {
     "research_papers": [
         # Asks for a specific finding from a specific paper in the collection.
-        "In the paper 'The Counterfeit Conundrum: Can Code Language Models "
-        "Grasp the Nuances of Their Incorrect Generations?' (Gu et al., ACL "
-        "2024), what is the main finding about how code models perceive their "
-        "own incorrect generations? Quote the relevant sentence.",
+        (
+            "In the paper 'The Counterfeit Conundrum: Can Code Language Models "
+            "Grasp the Nuances of Their Incorrect Generations?' (Gu et al., ACL "
+            "2024), what is the main finding about how code models perceive their "
+            "own incorrect generations? Quote the relevant sentence.",
+            "DBLP_conf_acl_GuLJOLSS24.pdf",
+        ),
         # Asks to compare across papers — impossible without the corpus.
-        "Compare how Solar-Lezama's 'The Sketching Approach to Program "
-        "Synthesis' and other program-synthesis papers in this collection "
-        "define the synthesis problem. Cite each paper.",
+        (
+            "Compare how 'Bridging the Gap Between General-Purpose and "
+            "Domain-Specific Compilers with Synthesis' (Cheung, Kamil, and "
+            "Solar-Lezama, SNAPL 2015) and 'Precise, Dynamic Information Flow "
+            "for Database-Backed Applications' (Yang, Hance, Austin, "
+            "Solar-Lezama, Flanagan, and Chong) each use program-synthesis-"
+            "adjacent techniques to solve a different systems problem. Cite "
+            "each paper directly.",
+            "DBLP_conf_snapl_CheungKS15.pdf and DBLP_conf_pldi_YangHASFC16.pdf",
+        ),
         # Asks for a verbatim quote — a no-retrieval model cannot reliably do this.
-        "Quote, word for word, the first sentence of the abstract of "
-        "'The Sketching Approach to Program Synthesis'.",
+        (
+            "Quote, word for word, the first sentence of the abstract of "
+            "'Bridging the Gap Between General-Purpose and Domain-Specific "
+            "Compilers with Synthesis' (Cheung, Kamil, and Solar-Lezama, "
+            "SNAPL 2015).",
+            "DBLP_conf_snapl_CheungKS15.pdf",
+        ),
     ],
     "wikipedia": [
         # Asks for a current fact that may be stale in the model's training.
-        "According to the Wikipedia article on the 100 meters, what is the "
-        "current men's world record, who holds it, and when was it set? "
-        "Quote the article.",
+        (
+            "According to the Wikipedia article on the 100 meters, what is the "
+            "current men's world record, who holds it, and when was it set? "
+            "Quote the article.",
+            "100_metres.html",
+        ),
         # Asks for a verbatim quote from a specific article.
-        "Quote the opening sentence of the Wikipedia article titled "
-        "'13 (2010 film)'.",
+        (
+            "Quote the opening sentence of the Wikipedia article titled "
+            "'13 (2010 film)'.",
+            "13_(2010_film).html",
+        ),
         # Asks for an aggregated answer across articles.
-        "List three significant events recorded in the Wikipedia article for "
-        "the year 1580, quoting the article for each.",
+        (
+            "List three significant events recorded in the Wikipedia article for "
+            "the year 1580, quoting the article for each.",
+            "1580.html",
+        ),
     ],
 }
 
@@ -175,16 +209,57 @@ EXAMPLE_PROMPTS = {
 # Return a list of prompt strings. Look at a few real documents in `Labs/CapstoneDatasets/` first so you can check the answers against ground truth.
 
 # %%
-def my_probe_prompts() -> list[str]:
+def my_probe_prompts() -> list[tuple[str, str]]:
     """Return 3-5 of YOUR OWN baseline prompts for your chosen scenario.
 
-    TODO — your turn. See the guidance above. Each item is a prompt string.
-    Open a few real documents in Labs/CapstoneDatasets/ so you can judge
-    whether the model's answers are accurate.
-
-    Delete the raise NotImplementedError line once your code works.
+    Each item is a (prompt, source_file) tuple. Each prompt below
+    references a real PDF in DOCS_DIR (checked by opening the actual files
+    with pdftotext) so the answers can be verified against ground truth.
+    Covers: a single-document fact, a verbatim quote, a cross-document
+    comparison, and an outside-the-corpus question.
     """
-    raise NotImplementedError("my_probe_prompts() — see the TODO above.")
+    return [
+        # Single-document fact. Verified: "The Three Pillars of Machine
+        # Programming" (Gottschlich et al., arXiv 2018) names its three
+        # pillars as intention, invention, and adaptation.
+        (
+            "In 'The Three Pillars of Machine Programming' (Gottschlich, "
+            "Solar-Lezama, Tatbul, Carbin, Rinard, Barzilay, Amarasinghe, "
+            "Tenenbaum, and Mattson), what are the three pillars the paper "
+            "identifies? Quote the sentence that names them.",
+            "DBLP_journals_corr_abs-1803-07244.pdf",
+        ),
+        # Verbatim quote. Verified against DBLP_journals_corr_abs-2503-22625.pdf
+        # (Gu, Jain, Li, Shetty, Shao, Li, Yang, Ellis, Sen, and
+        # Solar-Lezama, arXiv 2025) — a no-retrieval model cannot reliably
+        # reproduce this word for word.
+        (
+            "Quote, word for word, the opening sentence of the abstract of "
+            "'Challenges and Paths Towards AI for Software Engineering' (Gu, "
+            "Jain, Li, Shetty, Shao, Li, Yang, Ellis, Sen, and Solar-Lezama, "
+            "arXiv 2025).",
+            "DBLP_journals_corr_abs-2503-22625.pdf",
+        ),
+        # Cross-document comparison — impossible without the corpus. These
+        # two are both position/survey papers on the future of AI-assisted
+        # programming, published 7 years apart.
+        (
+            "Compare how 'The Three Pillars of Machine Programming' "
+            "(Gottschlich et al., 2018) and 'Challenges and Paths Towards AI "
+            "for Software Engineering' (Gu et al., 2025) each frame the "
+            "future of AI-assisted software development. Cite each paper "
+            "directly.",
+            "DBLP_journals_corr_abs-1803-07244.pdf and DBLP_journals_corr_abs-2503-22625.pdf",
+        ),
+        # Outside the corpus — tests whether the model hedges or fabricates
+        # a number it cannot actually know.
+        (
+            "As of today, how many times has 'The Three Pillars of Machine "
+            "Programming' (Gottschlich, Solar-Lezama, Tatbul, et al.) been "
+            "cited?",
+            "DBLP_journals_corr_abs-1803-07244.pdf",
+        ),
+    ]
 
 # %% [markdown]
 # ## Step 4 — Run the baseline probes and capture the evidence
@@ -201,16 +276,17 @@ def run_probes() -> None:
     print(f"Scenario: {SCENARIO}  |  Model: {LLM_MODEL}")
     print(f"Logging to: {LOG_PATH.name}\n")
 
-    for i, prompt in enumerate(prompts, start=1):
+    for i, (prompt, source_file) in enumerate(prompts, start=1):
         print("=" * 72)
         print(f"PROMPT {i}/{len(prompts)}: {prompt[:90]}...")
+        print(f"SOURCE FILE: {source_file or '(not tied to a single document)'}")
         try:
             answer = ask(chain, prompt)
         except Exception as e:
             print(f"  API error: {e}")
             continue
         print(f"\nRESPONSE:\n{answer}\n")
-        log_response(SCENARIO, prompt, answer)
+        log_response(SCENARIO, prompt, answer, source_file)
 
     print("=" * 72)
     print(
@@ -231,7 +307,7 @@ run_probes()
 # 2. **Provide examples** of prompts and the model's outputs (paste 2-3 telling ones from your log).
 # 3. **Identify key limitations** in the responses (hallucination, missing information, inconsistency, inability to quote).
 # 4. **Describe patterns** you observed in model behavior.
-# 5. **Explain whether retrieval is required** for this scenario and why.
+# 5. **Explain whether retrievalreview is required** for this scenario and why.
 # 6. **Describe what information** would need to be retrieved.
 # 7. **Explain why precision and relevance** of retrieved information matter — and how these choices affect reliability and user trust.
 #
